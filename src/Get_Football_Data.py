@@ -3,16 +3,23 @@ import numpy as np
 import requests
 import io
 import os
+import warnings
+from datetime import datetime
+
 
 # Create CSV DATA script
 # This file creates data as a csv file for use in other parts of the project
 
 
 # Get data for last 15 seasons
-SEASONS = [f"{i:02d}{i+1:02d}" for i in range(10, 25)]
+SEASONS = [f"{i:02d}{i+1:02d}" for i in range(10, 26)]
 LEAGUES = {"EPL": "E0", "LaLiga": "SP1", "Bundesliga": "D1"}
-OUTPUT_FOLDER = "../Data"
-OUTPUT_FILE = f"{OUTPUT_FOLDER}/football_training_data.csv"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_FOLDER = os.path.join(script_dir, "..", "Data")
+OUTPUT_FILE = os.path.join(OUTPUT_FOLDER, "football_training_data.csv")
+
+# SILENCE WARNINGS (Clean up terminal output)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 def download_data():
     """
@@ -20,14 +27,17 @@ def download_data():
     """
     all_data = []
     print(f"--- DOWNLOADING DATA (2010 - 2025) ---")
-    base_url = "http://www.football-data.co.uk/mmz4281/{season}/{league}.csv"
+    base_url = "https://www.football-data.co.uk/mmz4281/{season}/{league}.csv"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
     
     for season in SEASONS:
         for league_name, league_code in LEAGUES.items():
             url = base_url.format(season=season, league=league_code)
             print(f"Downloading data for {league_name} season {season} from {url}")
             try:
-                response = requests.get(url)
+                response = requests.get(url, headers=headers)
                 if response.status_code == 200:
                     df = pd.read_csv(io.StringIO(response.content.decode('utf-8', errors='ignore')))
                     df['Season'] = season
@@ -52,7 +62,12 @@ def calculate_form(df, form_window=5):
     """
     Creates the team's form (From last 5 matches)
     """
+    if df.empty: return pd.DataFrame()
     print("\nCALCULATING TEAM FORM (Rolling Last 5 Games)")
+    
+    # Standardize columns to avoid KeyErrors if HST/AST are missing in older data
+    if 'HST' not in df.columns: df['HST'] = 0
+    if 'AST' not in df.columns: df['AST'] = 0
     
     # One row per TEAM per match
     home = df[['Date', 'HomeTeam', 'FTHG', 'FTAG', 'FTR', 'HST', 'AST']].copy()
@@ -105,10 +120,35 @@ def reshape_to_match_row(long_df, original_df):
     final_df = pd.merge(final_df, away_stats, on=['Date', 'AwayTeam'], how='left')
     
     # Drop first few weeks where form is NaN
-    final_df = final_df.dropna(subset=['Home_Form_Pts', 'Away_Form_Pts'])
+    points_col = [c for c in final_df.columns if 'Home_Form_Points' in c]
+    
+    if points_col:
+        final_df = final_df.dropna(subset=points_col)
     
     return final_df
+
+def add_time_weighting(df):
+    """
+    QUANT FEATURE: Time Decay
+    Assigns a weight to each match based on how long ago it happened.
+    Recent matches = 1.0
+    Old matches = Closer to 0.0
+    """
+    print("\nAPPLYING TIME DECAY WEIGHTS")
+    current_date = pd.to_datetime(datetime.now())
     
+    # Calculate days ago
+    df['DaysAgo'] = (current_date - df['Date']).dt.days
+    
+    # Exponential Decay Formula: Weight = e^(-lambda * days)
+    # Lambda of 0.0005 means a game 4 years ago has ~50% weight of today
+    decay_rate = 0.0005
+    df['Time_Weight'] = np.exp(-decay_rate * df['DaysAgo'])
+    
+    # Normalize weights so they are typically between 0 and 1
+    df['Time_Weight'] = df['Time_Weight'].round(4)
+    
+    return df
 
 
 if __name__ == "__main__":
@@ -121,6 +161,7 @@ if __name__ == "__main__":
     
     # Reshape
     final_data = reshape_to_match_row(long_stats, raw_df)
+    final_data = add_time_weighting(final_data)
     
     # Only keep columns that actually exist (Old seasons might miss some odds)
     final_cols = [c for c in final_data if c in final_data.columns]
