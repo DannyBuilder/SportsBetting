@@ -5,6 +5,7 @@ import io
 import os
 import warnings
 from datetime import datetime
+import addData
 
 
 # Create CSV DATA script
@@ -13,7 +14,7 @@ from datetime import datetime
 
 # Get data for last 15 seasons
 SEASONS = [f"{i:02d}{i+1:02d}" for i in range(10, 26)]
-LEAGUES = {"EPL": "E0", "LaLiga": "SP1", "Bundesliga": "D1"}
+LEAGUES = {"EPL": "E0"}
 script_dir = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_FOLDER = os.path.join(script_dir, "..", "Data")
 OUTPUT_FILE = os.path.join(OUTPUT_FOLDER, "football_training_data.csv")
@@ -162,6 +163,7 @@ if __name__ == "__main__":
     # Reshape
     final_data = reshape_to_match_row(long_stats, raw_df)
     final_data = add_time_weighting(final_data)
+    final_data = addData.calculate_advanced_dominance(final_data)
     
     # Only keep columns that actually exist (Old seasons might miss some odds)
     final_cols = [c for c in final_data if c in final_data.columns]
